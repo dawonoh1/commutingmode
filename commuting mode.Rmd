@@ -1,0 +1,105 @@
+---
+title: "rent_commuting"
+author: "dawon"
+date: "2024-09-18"
+output: html_document
+---
+### Loading Data
+```{r}
+# Load ipumsr library
+library(ipumsr)
+
+# Read the IPUMS DDI and microdata
+ddi <- read_ipums_ddi("usa_00005.xml")
+data <- read_ipums_micro(ddi)
+
+# Convert the data into a dataframe
+data_df <- as.data.frame(data)
+
+# View the first few rows of the dataframe
+head(data_df)
+```
+### Filtering New York, Boston, and Washington DC metro areas
+```{r}
+# Load dplyr for data manipulation
+library(dplyr)
+
+# Define the MET2013 codes for the metro areas
+metro_codes <- c(35620, 14460, 47900)
+
+# Filter the data for New York, Boston, and Washington DC
+filtered_data <- data_df %>%
+  filter(MET2013 %in% metro_codes)
+
+# View the first few rows of the filtered data
+head(filtered_data)
+```
+
+### Categorical Variable
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+
+# Map TRANWORK to categories
+data_df <- data_df %>%
+  mutate(TRANWORK_category = case_when(
+    TRANWORK %in% c(10) ~ "Car, truck, or van",
+    TRANWORK %in% c(31, 32, 33, 34, 35, 36, 37) ~ "Public transport",
+    TRANWORK %in% c(50) ~ "Bicycle",  # Adjust if needed
+    TRANWORK %in% c(60) ~ "Walk",
+    TRUE ~ "Other"  # Handle any other values
+  )) %>%
+  mutate(TRANWORK_category = as.factor(TRANWORK_category),
+         OWNERSHP = as.factor(OWNERSHP))
+
+# View data summary
+summary(data_df)
+
+# Load fastDummies
+library(fastDummies)
+
+# One-hot encode using fastDummies
+data_onehot <- dummy_cols(data_df, select_columns = "TRANWORK_label", remove_first_dummy = FALSE)
+
+# View the first few rows of the one-hot encoded data
+head(data_onehot)
+```
+
+### Panel Structuring
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(plm)
+
+# Ensure YEAR is included
+data_df <- data_df %>% mutate(YEAR = as.factor(YEAR))  # Convert YEAR to a factor if not already
+
+# Convert to panel data frame with SERIAL, PERNUM, and YEAR
+pdata <- pdata.frame(data_df, index = c("SERIAL", "PERNUM", "YEAR"))
+
+# Check the structure
+str(pdata)
+```
+
+### Fixed or Random Model
+```{r}
+# Fit the Fixed Effects model
+model <- plm(RENT ~ TRANTIME + TRANWORK_category + OWNERSHP, data = pdata, model = "within")
+
+# Summary of the model
+summary(model)
+
+# Fit the Random Effects model
+model_random <- plm(RENT ~ TRANTIME + TRANWORK_category + OWNERSHP, data = pdata, model = "random")
+
+# Summary of the model
+summary(model_random)
+
+# Perform Hausman test
+hausman_test <- phtest(model, model_random)
+
+# View the test result
+hausman_test
+```
+
