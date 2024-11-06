@@ -1,0 +1,1028 @@
+---
+title: "rent_commuting"
+author: "dawon"
+date: "2024-09-18"
+output: html_document
+---
+### Loading Data
+```{r}
+# Load ipumsr library
+library(ipumsr)
+
+# Read the IPUMS DDI and microdata
+ddi <- read_ipums_ddi("usa_00011.xml")
+data <- read_ipums_micro(ddi)
+
+# Convert the data into a dataframe
+data_df <- as.data.frame(data)
+
+# View the first few rows of the dataframe
+head(data_df)
+```
+### Filtering New York, Boston, and Washington DC metro areas
+```{r}
+# Load dplyr for data manipulation
+library(dplyr)
+
+# Define the MET2013 codes for the metro areas
+metro_codes <- c(35620, 14460, 47900)
+
+# Filter the data for New York, Boston, and Washington DC
+filtered_data <- data_df |>
+  filter(MET2013 %in% metro_codes)
+
+# View the first few rows of the filtered data
+head(filtered_data)
+```
+
+### Categorical Variable-mode
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+
+# Map TRANWORK to categories
+data_df <- data_df |>
+  mutate(TRANWORK_category = case_when(
+    TRANWORK %in% c(10) ~ "Car, truck, or van",
+    TRANWORK %in% c(31, 32, 33, 34, 35, 36, 37) ~ "Public transport",
+    TRANWORK %in% c(50) ~ "Bicycle",  # Adjust if needed
+    TRANWORK %in% c(60) ~ "Walk",
+    TRUE ~ "Other"  # Handle any other values
+  )) %>%
+  mutate(TRANWORK_category = as.factor(TRANWORK_category))
+
+# View data summary
+summary(data_df)
+
+# Load fastDummies
+library(fastDummies)
+
+# One-hot encode using fastDummies
+data_onehot <- dummy_cols(data_df, select_columns = "TRANWORK_category", remove_first_dummy = FALSE)
+
+# View the first few rows of the one-hot encoded data
+head(data_onehot)
+```
+
+### Panel Structuring
+```{r echo=T, results='hide'} 
+# Load necessary libraries
+library(dplyr)
+library(plm)
+
+# Ensure YEAR is included
+data_df <- data_df |>
+  mutate(YEAR = as.factor(YEAR))  # Convert YEAR to a factor if not already
+
+# Convert to panel data frame with SERIAL, PERNUM, and YEAR
+# pdata <- pdata.frame(data_df, index = c("SERIAL", "PERNUM", "YEAR"))
+pdata <- pdata.frame(data_df, index = c("SERIAL", "YEAR"))
+
+# Check the structure
+str(pdata)
+```
+
+### Walk-only DF
+```{r}
+# Filter data for individuals who walk to work
+walkers_df <- data_df |>
+  filter(TRANWORK == 60) |>  # TRANWORK == 60 corresponds to walking
+  select(SERIAL, PERNUM, YEAR, TRANTIME, RENT, HHINCOME, HHTYPE, NCHILD, RACE, 
+         OWNERSHP, AGE, SEX, GQ, EMPSTAT, EDUC, VEHICLES, ROOMS)
+walkers_df <- pdata.frame(walkers_df, index = c("SERIAL", "YEAR"))
+```
+### Bicycle-only DF
+```{r}
+# Filter data for individuals who walk to work
+cyclists_df <- data_df |>
+  filter(TRANWORK == 50) |>  # TRANWORK == 60 corresponds to walking
+  select(SERIAL, PERNUM, YEAR, TRANTIME, RENT, HHINCOME, HHTYPE, NCHILD, RACE, 
+         OWNERSHP, AGE, SEX, GQ, EMPSTAT, EDUC, VEHICLES, ROOMS)
+cyclists_df <- pdata.frame(cyclists_df, index = c("SERIAL", "YEAR"))
+```
+
+### Recoding for the walk-only DF variables
+```{r}
+# Recode variables
+walkers_df <- walkers_df |>
+  mutate(
+    # Binary Homeownership: Renters (RENT > 0), Homeowners (OWNERSHP == 1)
+    Homeownership = case_when(
+      OWNERSHP == 1 ~ "Homeowner",
+      RENT > 0 ~ "Renter",
+      TRUE ~ NA_character_
+    ),
+    
+    # Age group: Young adults (<35), Older adults (>=35)
+    AgeGroup = case_when(
+      AGE < 35 ~ "Young Adult",
+      AGE >= 35 ~ "Older Adult"
+    ),
+    
+    # Quadratic Age
+    Age_Quadratic = AGE^2,
+    
+    # Race (Regrouping into 6 categories)
+    Race = case_when(
+      RACE == 1 ~ "White",
+      RACE == 2 ~ "Black/African American",
+      RACE == 3 ~ "American Indian or Alaska Native",
+      RACE %in% c(4, 5, 6) ~ "Asian",  # Group Chinese, Japanese, and Other Asian or Pacific Islander together
+      RACE == 7 ~ "Other race",
+      TRUE ~ NA_character_
+    ),
+    
+    # Gender: Men/Women
+    Gender = case_when(
+      SEX == 1 ~ "Male",
+      SEX == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+    
+     # Household Type (Categorical)
+    HouseholdType = case_when(
+      HHTYPE == 1 ~ "Married",
+      HHTYPE == 2 | HHTYPE == 3 ~ "Single living alone",
+      HHTYPE >= 4 & HHTYPE <= 6 ~ "Other",
+      TRUE ~ "Undetermined"
+    ),
+    
+    # Number of Children (Continuous Variable)
+    NumChildren = NCHILD,
+    
+    # Housing Size (Number of rooms)
+    HousingSize = ROOMS,
+    
+    # Vehicle Ownership (Binary Variable)
+    VehicleOwnership = case_when(
+      VEHICLES > 0 ~ "Yes",
+      VEHICLES == 0 ~ "No",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+### Recoding for the bicycle-only DF variables
+```{r}
+# Recode variables
+cyclists_df <- cyclists_df |>
+  mutate(
+    # Binary Homeownership: Renters (RENT > 0), Homeowners (OWNERSHP == 1)
+    Homeownership = case_when(
+      OWNERSHP == 1 ~ "Homeowner",
+      RENT > 0 ~ "Renter",
+      TRUE ~ NA_character_
+    ),
+    
+    # Age group: Young adults (<35), Older adults (>=35)
+    AgeGroup = case_when(
+      AGE < 35 ~ "Young Adult",
+      AGE >= 35 ~ "Older Adult"
+    ),
+    
+    # Quadratic Age
+    Age_Quadratic = AGE^2,
+    
+    # Race (Regrouping into 6 categories)
+    Race = case_when(
+      RACE == 1 ~ "White",
+      RACE == 2 ~ "Black/African American",
+      RACE == 3 ~ "American Indian or Alaska Native",
+      RACE %in% c(4, 5, 6) ~ "Asian",  # Group Chinese, Japanese, and Other Asian or Pacific Islander together
+      RACE == 7 ~ "Other race",
+      TRUE ~ NA_character_
+    ),
+    
+    # Gender: Men/Women
+    Gender = case_when(
+      SEX == 1 ~ "Male",
+      SEX == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+    
+     # Household Type (Categorical)
+    HouseholdType = case_when(
+      HHTYPE == 1 ~ "Married",
+      HHTYPE == 2 | HHTYPE == 3 ~ "Single living alone",
+      HHTYPE >= 4 & HHTYPE <= 6 ~ "Other",
+      TRUE ~ "Undetermined"
+    ),
+    
+    # Number of Children (Continuous Variable)
+    NumChildren = NCHILD,
+    
+    # Housing Size (Number of rooms)
+    HousingSize = ROOMS,
+    
+    # Vehicle Ownership (Binary Variable)
+    VehicleOwnership = case_when(
+      VEHICLES > 0 ~ "Yes",
+      VEHICLES == 0 ~ "No",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+### Fixed or Random Model
+```{r}
+# Fit the Fixed Effects model
+model_fixed <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS+ VEHICLES + 
+                     HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX, data = walkers_df, 
+             index=c("SERIAL", "YEAR"), model = "within")
+
+# Summary of the model
+summary(model_fixed)
+
+# Fit the Random Effects model
+model_random <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS+ VEHICLES + 
+                     HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX, data = walkers_df, 
+                    index=c("SERIAL", "YEAR"), model="random")
+
+# Summary of the model
+summary(model_random)
+
+# Perform Hausman test
+hausman_test <- phtest(model_fixed, model_random)
+
+# View the test result
+## If the p-value is significant (for example <0.05) then use fixed effects, if not use random effects.
+hausman_test
+```
+
+### Other testing to find the best model 1
+```{r}
+# Testing time-fixed effects. The null is that no time-fixed effects needed
+## If this number is < 0.05 then use time-fixed effect model
+model_fixed <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS+ VEHICLES + 
+                     HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX, data = walkers_df, 
+             index=c("SERIAL", "YEAR"), model = "within")
+
+model_fixed.time <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS+ VEHICLES + 
+                     HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR), data = walkers_df, 
+             index=c("SERIAL", "YEAR"), model = "within")
+
+pFtest(model_fixed.time, model_fixed)
+
+plmtest(model_fixed, c("time"), type=("bp"))
+# plmtest(model_fixed, c("individual"), type=("bp"))
+# plmtest(model_fixed, c("twoways"), type=("bp"))
+
+# Testing for random effects: Breusch-Pagan Lagrange multiplier (LM)
+## Breusch-Pagan Lagrange Multiplier for random effects. Null is no panel effect (i.e. OLS better).
+## Regular OLS (pooling model) using plm
+## The LM test helps you decide between a random effects regression and a simple OLS regression.
+## The null hypothesis in the LM test is that variances across entities is zero. This is, no significant difference across units (i.e. no panel effect). 
+## If the p-value is significant (for example <0.05) then random effect is appropriate - significant differences across units(people), so don't  run a simple OLS regression.
+pool <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS+ VEHICLES + 
+                     HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX , data=walkers_df,
+            index=c("SERIAL", "YEAR"), model="pooling")
+plmtest(pool, type=c("bp"))
+```
+### Other testing to find the best model 2
+```{r}
+# Testing for cross-sectional dependence/contemporaneous correlation: using Breusch-Pagan LM test of independence and Pasaran CD test
+## B-P/LM and Pasaran CD (cross-sectional dependence) tests are used to test whether the residuals are correlated across entities*. Cross-sectional dependence can lead to bias in tests results (also called contemporaneous correlation). 
+## If the p-value is significant (for example <0.05) then cross-sectional dependence exists.
+# pcdtest(model_fixed, test = c("lm"))
+# pcdtest(model_fixed, test = c("cd")) #Sample too larege - use a subset to test
+
+# Sample 10% of the data to reduce size
+set.seed(123)  # For reproducibility
+walkers_df_sample <- walkers_df |>
+  sample_frac(0.05)  # Randomly sample 10% of rows
+
+walkers_df_sample_pdata <- pdata.frame(walkers_df_sample, index = c("SERIAL", "YEAR"))
+
+# Check the structure to ensure it's a proper pdata.frame
+str(walkers_df_sample_pdata)
+
+# Refit the model using the sampled data
+model_sample <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS+ VEHICLES + 
+                     HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX, 
+                   data = walkers_df_sample_pdata, 
+                   model = "within", 
+                   index = c("SERIAL", "YEAR"))
+
+# Test cross-sectional dependence on the reduced model
+pcdtest(model_sample, test = "lm")
+
+# Testing for serial correlation
+## If the p-value is significant (for example <0.05) then serial correlation exists.
+pbgtest(model_fixed)
+```
+
+### Other testing to find the best model 2
+```{r}
+# Testing for heteroskedasticity
+## If the p-value is significant (for example <0.05) then presence of heteroskedasticity
+library(lmtest)
+bptest(TRANTIME ~ RENT + OWNERSHP + ROOMS+ VEHICLES + 
+                     HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR), 
+       data = walkers_df, studentize=F)
+
+# Testing for unit roots/stationarity
+##  The Dickey-Fuller test to check for stochastic trends. The null hypothesis is that the series has a unit root (i.e. non-stationary). If unit root is present you can take the first difference of the variable. 
+## If p-value < 0.05 then no unit roots present.
+#Panel.set <- plm.data(walkers_df, index = c("SERIAL", "YEAR"))
+#library(tseries)
+#adf.test(Panel.set$y, k=2)
+```
+
+### fixed effects model with Driscoll-Kraay standard errors (walk)
+
+```{r}
+# Load necessary packages
+library(plm)        # For panel data modeling
+library(lmtest)     # For hypothesis tests on model coefficients
+library(sandwich)   # For robust standard errors (including Driscoll-Kraay)
+
+# Ensure your data is formatted as a pdata.frame for panel data analysis
+# Assuming 'ID' is the individual identifier and 'YEAR' is the time identifier
+walkers_df <- pdata.frame(walkers_df, index = c("SERIAL", "YEAR"))
+
+# Fit the fixed effects model
+model <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS + VEHICLES + 
+               HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR),
+             data = walkers_df, 
+             model = "within")
+
+# Calculate Driscoll-Kraay standard errors
+dk_se <- coeftest(model, vcov = vcovSCC(model, type = "HC1", maxlag = 4))
+
+# Output the model summary with Driscoll-Kraay standard errors
+summary(model)
+dk_se  # Shows coefficients with Driscoll-Kraay standard errors
+```
+
+###Walk model for home owners and renters
+```{r}
+# Load necessary libraries
+library(stargazer)
+library(plm)
+library(lmtest)
+library(sandwich)
+
+# Split the data into two groups based on OWNERSHP
+walkers_df_own <- walkers_df %>% filter(OWNERSHP == 1)  # OWNERSHP = 1
+walkers_df_rent <- walkers_df %>% filter(OWNERSHP == 2)  # OWNERSHP = 2
+
+# Check for duplicates in the pdata.frame
+#table(index(walkers_df_own))  # Check duplicate ID-Year pairs in walkers_df_own
+#table(index(walkers_df_rent)) # Check duplicate ID-Year pairs in walkers_df_rent
+
+# Check and remove duplicates if necessary
+#walkers_df_own <- walkers_df_own[!duplicated(walkers_df_own[, c("SERIAL", "YEAR")]), ]
+#walkers_df_rent <- walkers_df_rent[!duplicated(walkers_df_rent[, c("SERIAL", "YEAR")]), ]
+
+# Recreate pdata.frame after removing duplicates
+walkers_df_own <- pdata.frame(walkers_df_own, index = c("SERIAL", "YEAR"))
+walkers_df_rent <- pdata.frame(walkers_df_rent, index = c("SERIAL", "YEAR"))
+
+# Remove rows with missing values
+#walkers_df_own <- na.omit(walkers_df_own[, c("TRANTIME",  "ROOMS", 
+                                              #"VEHICLES", "HHINCOME", "HHTYPE", "NCHILD", 
+                                              #"RACE", "AGE", "SEX", "YEAR")])
+
+#walkers_df_rent <- na.omit(walkers_df_rent[, c("TRANTIME", "RENT", "ROOMS", 
+                                               #"VEHICLES", "HHINCOME", "HHTYPE", "NCHILD", 
+                                               #"RACE", "AGE", "SEX", "YEAR")])
+
+# Fit the fixed effects models
+model_own <- plm(TRANTIME ~ ROOMS + VEHICLES + HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR),
+                 data = walkers_df_own, model = "within")
+
+model_rent <- plm(TRANTIME ~ RENT + ROOMS + VEHICLES + HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR),
+                  data = walkers_df_rent, model = "within")
+
+# Get Driscoll-Kraay standard errors
+dk_se_own <- sqrt(diag(vcovSCC(model_own, type = "HC1", maxlag = 4)))
+dk_se_rent <- sqrt(diag(vcovSCC(model_rent, type = "HC1", maxlag = 4)))
+
+# Check lengths of standard errors
+cat("Length of dk_se_own:", length(dk_se_own), "\n")
+cat("Length of dk_se_rent:", length(dk_se_rent), "\n")
+
+# Summary both models with Driscoll-Kraay standard errors
+summary(model_own)
+dk_se_own   # Shows coefficients with Driscoll-Kraay standard errors
+summary(model_rent)
+dk_se_rent  # Shows coefficients with Driscoll-Kraay standard errors
+```
+##Result Stargazer
+```{r}
+# Load the necessary libraries
+library(stargazer)
+library(officer)
+
+
+# Create stargazer output as HTML (saved as a file)
+stargazer(model_own, model_rent, 
+          type = "html", 
+          se = list(dk_se_own, dk_se_rent),  # Using Driscoll-Kraay standard errors
+          title = "Fixed Effects Models with Driscoll-Kraay Standard Errors", 
+          out = "model_output_walk.html")
+
+# Read the HTML output into R
+html_content <- paste(readLines("model_output_walk.html"), collapse = "\n")
+
+# Create a Word document and add the stargazer HTML table
+doc <- read_docx() %>%
+  body_add_par("Fixed Effects Models with Driscoll-Kraay Standard Errors", style = "heading 1") %>%
+  body_add_par(html_content, style = "Normal")
+
+# Save the Word document
+print(doc, target = "model_output_walk.docx")
+```
+
+##Descriptive Statistics
+```{r}
+# Load the package
+library(psych)
+
+# Descriptive statistics for selected variables
+desc_stats <- describe(walkers_df[, c("RENT", "OWNERSHP", "ROOMS", "VEHICLES", 
+                                      "HHINCOME", "HHTYPE", "NCHILD", "RACE", 
+                                      "AGE", "SEX", "YEAR")])
+
+# View the descriptive statistics
+desc_stats
+
+# Create a descriptive statistics table with stargazer
+stargazer(walkers_df[, c("RENT", "OWNERSHP", "ROOMS", "VEHICLES", 
+                         "HHINCOME", "HHTYPE", "NCHILD", "RACE", 
+                         "AGE", "SEX", "YEAR")],
+          type = "text",  # Can also be "html" or "latex"
+          summary = TRUE, # Get the summary statistics
+          digits = 2,     # Number of decimal places
+          out = "desc_stats_table.txt")  # Optional: Save to file
+```
+
+##Yearly Sample Size
+```{r}
+# Assuming your dataset is named 'data'
+library(ggplot2)
+library(dplyr)
+
+# Aggregate the number of unique SERIALs by YEAR
+yearly_serials <- data %>%
+  mutate(YEAR = floor(YEAR)) %>%  # Use floor to round down to nearest year
+  group_by(YEAR) %>%
+  summarise(num_serials = n_distinct(SERIAL))
+
+# Line plot of the number of unique SERIALs by YEAR
+ggplot(yearly_serials, aes(x = as.factor(YEAR), y = num_serials)) +  # Treat YEAR as a factor for discrete values
+  geom_line(aes(group = 1), color = "blue", size = 1) +  # Connect points with lines
+  geom_point(color = "blue", size = 2) +
+  labs(title = "Number of Unique Households (SERIAL) Over Years",
+       x = "Year", y = "Number of Households") +
+  theme_minimal()
+```
+
+### Average Commuting Time Over Time
+```{r}
+# Aggregate TRANTIME by YEAR to get annual averages
+yearly_trantime <- aggregate(TRANTIME ~ YEAR, data = walkers_df, mean)
+
+# Line plot of average TRANTIME by YEAR
+ggplot(yearly_trantime, aes(x = YEAR, y = TRANTIME)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "blue", size = 2) +
+  labs(title = "Average Walk Commuting Time Over Years",
+       x = "Year", y = "Time (minutes)") +
+  theme_minimal()
+
+
+
+# Explicitly convert YEAR to integer
+walkers_df$YEAR <- as.integer(walkers_df$YEAR)
+
+# Aggregate TRANTIME by YEAR to get annual averages
+yearly_trantime <- aggregate(TRANTIME ~ YEAR, data = walkers_df, mean)
+
+# Line plot of average TRANTIME by YEAR
+ggplot(yearly_trantime, aes(x = YEAR, y = TRANTIME)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "blue", size = 2) +
+  labs(title = "Average Walk Commuting Time Over Years",
+       x = "Year", y = "Time (minutes)") +
+  scale_x_continuous(breaks = floor(min(yearly_trantime$YEAR)):ceiling(max(yearly_trantime$YEAR))) +  # Ensure whole number years on x-axis
+  theme_minimal()
+```
+
+### Average Commuting Time by Homeownership
+```{r}
+# Check unique values in OWNERSHP
+unique(walkers_df$OWNERSHP)
+
+# Ensure OWNERSHP is a factor with two levels (1 for renters, 2 for homeowners)
+walkers_df$OWNERSHP <- factor(walkers_df$OWNERSHP, levels = c(1, 2), labels = c("Renter", "Homeowner"))
+
+# Calculate the mean TRANTIME by YEAR and OWNERSHP (renter/homeowner)
+yearly_ownership_trantime <- aggregate(TRANTIME ~ YEAR + OWNERSHP, data = walkers_df, mean)
+
+# Line plot of average TRANTIME by YEAR and OWNERSHP
+ggplot(yearly_ownership_trantime, aes(x = YEAR, y = TRANTIME, color = OWNERSHP)) +
+  geom_line(size = 1) +  # Change linewidth to size
+  geom_point(size = 3) +  # Change linewidth to size
+  labs(title = "Average Walk Commuting Time by Homeownership Over Years",
+       x = "Year", y = "Time (minutes)") +
+  theme_minimal() +
+  scale_color_manual(values = c("lightblue", "lightgreen")) +  # Custom colors for two levels
+  scale_x_continuous(breaks = floor(min(yearly_ownership_trantime$YEAR)):ceiling(max(yearly_ownership_trantime$YEAR)))  # Ensure whole number years on x-axis
+```
+
+### Average Commuting Time by Gender Over Time
+```{r}
+# Calculate the mean TRANTIME by YEAR and SEX
+yearly_gender_trantime <- aggregate(TRANTIME ~ YEAR + SEX, data = walkers_df, mean)
+
+# Line plot of average TRANTIME by YEAR and SEX
+ggplot(yearly_gender_trantime, aes(x = YEAR, y = TRANTIME, color = SEX)) +
+  geom_line(linewidth = 1) +
+  geom_point(linewidth = 2) +
+  labs(title = "Average Walk Commuting Time by Gender Over Years",
+       x = "Year", y = "Time (minutes)") +
+  theme_minimal() +
+  scale_color_manual(values = c("lightblue", "pink"))
+
+
+
+# Explicitly convert YEAR to integer
+walkers_df$YEAR <- as.integer(walkers_df$YEAR)
+
+# Calculate the mean TRANTIME by YEAR and SEX
+yearly_gender_trantime <- aggregate(TRANTIME ~ YEAR + SEX, data = walkers_df, mean)
+
+# Line plot of average TRANTIME by YEAR and SEX
+ggplot(yearly_gender_trantime, aes(x = YEAR, y = TRANTIME, color = SEX)) +
+  geom_line(linewidth = 1) +
+  geom_point(linewidth = 2) +
+  labs(title = "Average Walk Commuting Time by Gender Over Years",
+       x = "Year", y = "Time (minutes)") +
+  theme_minimal() +
+  scale_color_manual(values = c("lightblue", "pink")) +
+  scale_x_continuous(breaks = floor(min(yearly_gender_trantime$YEAR)):ceiling(max(yearly_gender_trantime$YEAR)))  # Ensure whole number years on x-axis
+```
+
+### Histogram of Walk Commuting Time
+```{r}
+# Histogram of TRANTIME
+ggplot(walkers_df, aes(x = TRANTIME)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  labs(title = "Distribution of Walk Commuting Time",
+       x = "Time (minutes)", y = "Frequency") +
+  theme_minimal()
+```
+### Faceted Histogram of Commuting by SEX
+```{r}
+# Histogram of TRANTIME by SEX with facet
+ggplot(walkers_df, aes(x = TRANTIME)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  labs(title = "Walk Commuting Time by Gender",
+       x = "Walk Commuting Time"kj'
+       
+       , y = "Frequency") +
+  theme_minimal() +
+  facet_wrap(~ SEX)
+```
+### Walk Commuting Time by Age Group
+```{r}
+# Convert AGE to a categorical variable for age groups (if applicable)
+walkers_df$AGE_GROUP <- cut(walkers_df$AGE, breaks = c(0, 18, 35, 50, 65, Inf),
+                            labels = c("0-18", "19-35", "36-50", "51-65", "65+"))
+
+# Box plot of TRANTIME by AGE_GROUP
+ggplot(walkers_df, aes(x = AGE_GROUP, y = TRANTIME)) +
+  geom_boxplot(fill = "orange") +
+  labs(title = "Walk Commuting Time by Age Group",
+       x = "Age Group", y = "Walk Commuting Time") +
+  theme_minimal()
+
+# Convert AGE to a categorical variable for age groups (if applicable)
+walkers_df$AGE_GROUP <- cut(walkers_df$AGE, breaks = c(0, 18, 35, 50, 65, Inf),
+                            labels = c("0-18", "19-35", "36-50", "51-65", "65+"))
+
+# Calculate the mean TRANTIME by AGE_GROUP
+age_group_trantime <- aggregate(TRANTIME ~ AGE_GROUP, data = walkers_df, mean)
+
+# Line plot of average TRANTIME by AGE_GROUP
+ggplot(age_group_trantime, aes(x = AGE_GROUP, y = TRANTIME, group = 1)) +
+  geom_line(color = "orange", size = 1) +
+  geom_point(color = "orange", size = 3) +
+  labs(title = "Average Walk Commuting Time by Age Group",
+       x = "Age Group", y = "Walk Commuting Time") +
+  theme_minimal()
+```
+###  Plot of HHINCOME vs. TRANTIME
+```{r}
+# Create bins for HHINCOME
+walkers_df$Income_Group <- cut(walkers_df$HHINCOME, 
+                                breaks = c(0, 25000, 50000, 75000, 100000, 150000, Inf), 
+                                labels = c("0-25K", "25K-50K", "50K-75K", "75K-100K", "100K-150K", "150K+"))
+
+# Calculate the average TRANTIME for each Income Group, excluding NAs
+avg_trantime_by_income <- walkers_df %>%
+  filter(!is.na(Income_Group)) %>%  # Remove rows where Income_Group is NA
+  group_by(Income_Group) %>%
+  summarise(Average_TRANTIME = mean(TRANTIME, na.rm = TRUE))
+
+# Create the line plot of average TRANTIME by Income Group
+ggplot(avg_trantime_by_income, aes(x = Income_Group, y = Average_TRANTIME, group = 1)) +
+  geom_line(color = "blue", size = 1) +  # Line for average TRANTIME
+  geom_point(color = "blue", size = 3) +  # Points for each income group
+  labs(title = "Average Walk Commuting Time by Household Income Group",
+       x = "Household Income Group", y = "Time (minutes)") +
+  theme_minimal()
+
+```
+
+### Box Plot of TRANTIME by HHTYPE (Household Type)
+```{r}
+# Calculate the average TRANTIME by HHTYPE
+average_trantime_by_hhtype <- walkers_df %>%
+  group_by(HHTYPE) %>%
+  summarise(avg_trantime = mean(TRANTIME, na.rm = TRUE))
+
+# Line plot of average TRANTIME by HHTYPE
+ggplot(average_trantime_by_hhtype, aes(x = HHTYPE, y = avg_trantime, group = 1)) +
+  geom_line(color = "blue", size = 1) +  # Line connecting the averages
+  geom_point(color = "blue", size = 2) +  # Points showing averages
+  labs(title = "Average Transportation Time by Household Type",
+       x = "Household Type", y = "Average Transportation Time") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+### Plotting Average TRANTIME by RENT Group
+```{r}
+# Create bins for RENT
+walkers_df$Rent_Group <- cut(walkers_df$RENT, 
+                              breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, Inf), 
+                              labels = c("0-500", "500-1000", "1000-1500", "1500-2000", 
+                                         "2000-2500", "2500-3000", "3000-3500", "3500-4000", "4000+"))
+
+# Calculate the average TRANTIME for each Rent Group, excluding NAs
+avg_trantime_by_rent <- walkers_df %>%
+  filter(!is.na(Rent_Group)) %>%  # Remove rows where Rent_Group is NA
+  group_by(Rent_Group) %>%
+  summarise(Average_TRANTIME = mean(TRANTIME, na.rm = TRUE))
+
+# Create the line plot of average TRANTIME by Rent Group
+ggplot(avg_trantime_by_rent, aes(x = Rent_Group, y = Average_TRANTIME, group = 1)) +
+  geom_line(color = "green", size = 1) +  # Line for average TRANTIME
+  geom_point(color = "green", size = 3) +  # Points for each rent group
+  labs(title = "Average Walk Commuting Time by Rent Group",
+       x = "Monthly Rent Group", y = "Time (minutes)") +
+  theme_minimal()
+```
+
+
+
+####################
+
+
+### fixed effects model with Driscoll-Kraay standard errors (cycle)
+```{r}
+# Load necessary packages
+library(plm)        # For panel data modeling
+library(lmtest)     # For hypothesis tests on model coefficients
+library(sandwich)   # For robust standard errors (including Driscoll-Kraay)
+
+# Ensure your data is formatted as a pdata.frame for panel data analysis
+# Assuming 'ID' is the individual identifier and 'YEAR' is the time identifier
+cyclists_df <- pdata.frame(cyclists_df, index = c("SERIAL", "YEAR"))
+
+# Fit the fixed effects model
+model1 <- plm(TRANTIME ~ RENT + OWNERSHP + ROOMS + VEHICLES + 
+               HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR),
+             data = cyclists_df, 
+             model = "within")
+
+# Calculate Driscoll-Kraay standard errors
+dk_se_1 <- coeftest(model, vcov = vcovSCC(model1, type = "HC1", maxlag = 4))
+
+# Output the model summary with Driscoll-Kraay standard errors
+summary(model)
+dk_se_1  # Shows coefficients with Driscoll-Kraay standard errors
+```
+
+###Bike model for home owners and renters
+```{r}
+# Load necessary libraries
+library(stargazer)
+library(plm)
+library(lmtest)
+library(sandwich)
+
+# Split the data into two groups based on OWNERSHP
+cyclists_df_own <- cyclists_df %>% filter(OWNERSHP == 1)  # OWNERSHP = 1
+cyclists_df_rent <- cyclists_df %>% filter(OWNERSHP == 2)  # OWNERSHP = 2
+
+# Check for duplicates in the pdata.frame
+#table(index(walkers_df_own))  # Check duplicate ID-Year pairs in walkers_df_own
+#table(index(walkers_df_rent)) # Check duplicate ID-Year pairs in walkers_df_rent
+
+# Check and remove duplicates if necessary
+#walkers_df_own <- walkers_df_own[!duplicated(walkers_df_own[, c("SERIAL", "YEAR")]), ]
+#walkers_df_rent <- walkers_df_rent[!duplicated(walkers_df_rent[, c("SERIAL", "YEAR")]), ]
+
+# Recreate pdata.frame after removing duplicates
+cyclists_df_own <- pdata.frame(cyclists_df_own, index = c("SERIAL", "YEAR"))
+cyclists_df_rent <- pdata.frame(cyclists_df_rent, index = c("SERIAL", "YEAR"))
+
+# Remove rows with missing values
+#walkers_df_own <- na.omit(walkers_df_own[, c("TRANTIME",  "ROOMS", 
+                                              #"VEHICLES", "HHINCOME", "HHTYPE", "NCHILD", 
+                                              #"RACE", "AGE", "SEX", "YEAR")])
+
+#walkers_df_rent <- na.omit(walkers_df_rent[, c("TRANTIME", "RENT", "ROOMS", 
+                                               #"VEHICLES", "HHINCOME", "HHTYPE", "NCHILD", 
+                                               #"RACE", "AGE", "SEX", "YEAR")])
+
+# Fit the fixed effects models
+model_own <- plm(TRANTIME ~ ROOMS + VEHICLES + HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR),
+                 data = cyclists_df_own, model = "within")
+
+model_rent <- plm(TRANTIME ~ RENT + ROOMS + VEHICLES + HHINCOME + HHTYPE + NCHILD + RACE + AGE + SEX + factor(YEAR),
+                  data = cyclists_df_rent, model = "within")
+
+# Get Driscoll-Kraay standard errors
+dk_se_own <- sqrt(diag(vcovSCC(model_own, type = "HC1", maxlag = 4)))
+dk_se_rent <- sqrt(diag(vcovSCC(model_rent, type = "HC1", maxlag = 4)))
+
+# Check lengths of standard errors
+cat("Length of dk_se_own:", length(dk_se_own), "\n")
+cat("Length of dk_se_rent:", length(dk_se_rent), "\n")
+
+# Summary both models with Driscoll-Kraay standard errors
+summary(model_own)
+dk_se_own   # Shows coefficients with Driscoll-Kraay standard errors
+summary(model_rent)
+dk_se_rent  # Shows coefficients with Driscoll-Kraay standard errors
+```
+
+##Result Stargazer
+```{r}
+# Load the necessary libraries
+library(stargazer)
+library(officer)
+
+
+# Create stargazer output as HTML (saved as a file)
+stargazer(model_own, model_rent, 
+          type = "html", 
+          se = list(dk_se_own, dk_se_rent),  # Using Driscoll-Kraay standard errors
+          title = "Fixed Effects Models with Driscoll-Kraay Standard Errors", 
+          out = "model_output_bike.html")
+
+# Read the HTML output into R
+html_content <- paste(readLines("model_output_bike.html"), collapse = "\n")
+
+# Create a Word document and add the stargazer HTML table
+doc <- read_docx() %>%
+  body_add_par("Fixed Effects Models with Driscoll-Kraay Standard Errors", style = "heading 1") %>%
+  body_add_par(html_content, style = "Normal")
+
+# Save the Word document
+print(doc, target = "model_output_bike.docx")
+```
+ 
+##Descriptive Statistics
+```{r}
+# Load the package
+library(psych)
+
+# Descriptive statistics for selected variables
+desc_stats <- describe(cyclists_df[, c("RENT", "OWNERSHP", "ROOMS", "VEHICLES", 
+                                      "HHINCOME", "HHTYPE", "NCHILD", "RACE", 
+                                      "AGE", "SEX", "YEAR")])
+
+# View the descriptive statistics
+desc_stats
+```
+ 
+##Yearly Sample Size
+```{r}
+# Assuming your dataset is named 'cyclists_df'
+library(ggplot2)
+library(dplyr)
+
+# Aggregate the number of unique SERIALs by YEAR
+yearly_serials <- cyclists_df %>%
+  mutate(YEAR = floor(YEAR) + 2009) %>%  # Add 2009 to the YEAR column to shift to actual calendar years
+  group_by(YEAR) %>%
+  summarise(num_serials = n_distinct(SERIAL))
+
+# Line plot of the number of unique SERIALs by YEAR
+ggplot(yearly_serials, aes(x = as.factor(YEAR), y = num_serials)) +  # Treat YEAR as a factor for discrete values
+  geom_line(aes(group = 1), color = "blue", size = 1) +  # Connect points with lines
+  geom_point(color = "blue", size = 2) +
+  labs(title = "Number of Unique Households Over Years",
+       x = "Year", y = "Number of Households") +
+  theme_minimal()
+```
+ 
+### Average Commuting Time Over Time
+```{r}
+# Explicitly convert YEAR to integer
+cyclists_df$YEAR <- as.integer(cyclists_df$YEAR)
+
+# Adjust YEAR to reflect the actual calendar years (1 -> 2010, 2 -> 2011, etc.)
+cyclists_df$YEAR <- cyclists_df$YEAR 
+
+# Aggregate the mean TRANTIME by YEAR (adjusting YEAR to actual calendar years)
+yearly_trantime <- cyclists_df %>%
+  mutate(YEAR = floor(YEAR) + 2009) %>%  # Adjust YEAR to calendar years by adding 2009
+  group_by(YEAR) %>%
+  summarise(avg_trantime = mean(TRANTIME, na.rm = TRUE))
+
+# Line plot of average TRANTIME by YEAR
+ggplot(yearly_trantime, aes(x = YEAR, y = avg_trantime)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "blue", size = 2) +
+  labs(title = "Average Bike Commuting Time Over Time",
+       x = "Year", y = "Time (minutes)") +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(min(yearly_trantime$YEAR), max(yearly_trantime$YEAR), 1))  # Ensure whole number years on x-axis
+
+```
+ 
+### Average Commuting Time by Homeownership
+```{r}
+# Check unique values in OWNERSHP
+unique(cyclists_df$OWNERSHP)
+
+# Ensure OWNERSHP is a factor with two levels (1 for renters, 2 for homeowners)
+cyclists_df$OWNERSHP <- factor(cyclists_df$OWNERSHP, levels = c(1, 2), labels = c("Renter", "Homeowner"))
+
+# Filter out rows with NA values in YEAR or TRANTIME to avoid errors
+cyclists_df <- cyclists_df %>%
+  filter(!is.na(YEAR), !is.na(TRANTIME), OWNERSHP %in% c("Renter", "Homeowner"))
+
+# Adjust YEAR to actual calendar years by adding an appropriate offset (e.g., if YEAR starts at 1 for 2010, add 2009)
+cyclists_df <- cyclists_df %>%
+  mutate(YEAR = as.numeric(YEAR) + 2009)  # Adjust this based on your data's starting year if necessary
+
+# Calculate the mean TRANTIME by YEAR and OWNERSHP (renter/homeowner)
+yearly_ownership_trantime <- aggregate(TRANTIME ~ YEAR + OWNERSHP, data = cyclists_df, mean)
+
+# Ensure YEAR is numeric in yearly_ownership_trantime
+yearly_ownership_trantime$YEAR <- as.numeric(yearly_ownership_trantime$YEAR)
+
+# Line plot of average TRANTIME by YEAR and OWNERSHP
+ggplot(yearly_ownership_trantime, aes(x = YEAR, y = TRANTIME, color = OWNERSHP)) +
+  geom_line(size = 1) +  # Line width adjusted
+  geom_point(size = 3) +  # Point size adjusted
+  labs(title = "Average Walk Commuting Time by Homeownership Over Years",
+       x = "Year", y = "Time (minutes)") +
+  theme_minimal() +
+  scale_color_manual(values = c("lightblue", "lightgreen")) +  # Custom colors for Renter and Homeowner
+  scale_x_continuous(breaks = seq(min(na.omit(yearly_ownership_trantime$YEAR)), 
+                                  max(na.omit(yearly_ownership_trantime$YEAR)), 1))  # Ensure whole number years on x-axis
+```
+ 
+### Average Commuting Time by Gender Over Time
+```{r}
+# Calculate the mean TRANTIME by YEAR and SEX
+yearly_gender_trantime <- aggregate(TRANTIME ~ YEAR + SEX, data = cyclists_df, mean)
+
+
+# Explicitly convert YEAR to integer
+cyclists_df$YEAR <- as.integer(cyclists_df$YEAR)
+
+# Convert SEX to a factor if it isn't already
+cyclists_df$SEX <- as.factor(cyclists_df$SEX)
+
+# Calculate the mean TRANTIME by YEAR and SEX
+yearly_gender_trantime <- aggregate(TRANTIME ~ YEAR + SEX, data = cyclists_df, mean)
+
+# Line plot of average TRANTIME by YEAR and SEX
+ggplot(yearly_gender_trantime, aes(x = YEAR, y = TRANTIME, color = SEX)) +
+  geom_line(linewidth = 1) +
+  geom_point(linewidth = 2) +
+  labs(title = "Average Bike Commuting Time by Gender Over Years",
+       x = "Year", y = "Time (minutes)") +
+  theme_minimal() +
+  scale_color_manual(values = c("lightblue", "pink")) +  # Specify colors for different sexes
+  scale_x_continuous(breaks = floor(min(yearly_gender_trantime$YEAR)):ceiling(max(yearly_gender_trantime$YEAR)))  # Ensure whole number years on x-axis
+```
+
+
+### Histogram of Bike Commuting Time
+```{r}
+# Histogram of TRANTIME
+ggplot(cyclists_df, aes(x = TRANTIME)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  labs(title = "Distribution of Bike Commuting Time",
+       x = "Time (minutes)", y = "Frequency") +
+  theme_minimal()
+```
+
+
+### Faceted Histogram of Commuting by SEX
+```{r}
+# Ensure SEX is a factor and TRANTIME is numeric
+cyclists_df$SEX <- as.factor(cyclists_df$SEX)
+cyclists_df$TRANTIME <- as.numeric(cyclists_df$TRANTIME)
+
+# Remove any rows with missing data in TRANTIME or SEX
+cyclists_df <- cyclists_df[!is.na(cyclists_df$TRANTIME) & !is.na(cyclists_df$SEX), ]
+
+# Faceted density plot by SEX
+ggplot(cyclists_df, aes(x = TRANTIME, fill = SEX, color = SEX)) +
+  geom_density(alpha = 0.5) + # Adjust alpha for transparency
+  labs(title = "Bike Commuting Time by Gender",
+       x = "Bike Commuting Time", y = "Density") +
+  theme_minimal() +
+  facet_wrap(~ SEX, scales = "free_y")  # Use 'free_y' to scale y-axis separately for each facet
+```
+ 
+### Bike Commuting Time by Age Group
+```{r}
+# Convert AGE to a categorical variable for age groups (if applicable)
+cyclists_df$AGE_GROUP <- cut(cyclists_df$AGE, breaks = c(0, 18, 35, 50, 65, Inf),
+                            labels = c("0-18", "19-35", "36-50", "51-65", "65+"))
+
+# Convert AGE to a categorical variable for age groups (if applicable)
+cyclists_df$AGE_GROUP <- cut(cyclists_df$AGE, breaks = c(0, 18, 35, 50, 65, Inf),
+                            labels = c("0-18", "19-35", "36-50", "51-65", "65+"))
+
+# Calculate the mean TRANTIME by AGE_GROUP
+age_group_trantime <- aggregate(TRANTIME ~ AGE_GROUP, data = cyclists_df, mean)
+
+# Line plot of average TRANTIME by AGE_GROUP
+ggplot(age_group_trantime, aes(x = AGE_GROUP, y = TRANTIME, group = 1)) +
+  geom_line(color = "orange", size = 1) +
+  geom_point(color = "orange", size = 3) +
+  labs(title = "Average Bike Commuting Time by Age Group",
+       x = "Age Group", y = "Bike Commuting Time") +
+  theme_minimal()
+```
+
+###  Plot of HHINCOME vs. TRANTIME
+```{r}
+# Create bins for HHINCOME
+cyclists_df$Income_Group <- cut(cyclists_df$HHINCOME, 
+                                breaks = c(0, 25000, 50000, 75000, 100000, 150000, Inf), 
+                                labels = c("0-25K", "25K-50K", "50K-75K", "75K-100K", "100K-150K", "150K+"))
+
+# Calculate the average TRANTIME for each Income Group, excluding NAs
+avg_trantime_by_income <- cyclists_df %>%
+  filter(!is.na(Income_Group)) %>%  # Remove rows where Income_Group is NA
+  group_by(Income_Group) %>%
+  summarise(Average_TRANTIME = mean(TRANTIME, na.rm = TRUE))
+
+# Create the line plot of average TRANTIME by Income Group
+ggplot(avg_trantime_by_income, aes(x = Income_Group, y = Average_TRANTIME, group = 1)) +
+  geom_line(color = "blue", size = 1) +  # Line for average TRANTIME
+  geom_point(color = "blue", size = 3) +  # Points for each income group
+  labs(title = "Average Bike Commuting Time by Household Income Group",
+       x = "Household Income Group", y = "Time (minutes)") +
+  theme_minimal()
+
+```
+ 
+### Box Plot of TRANTIME by HHTYPE (Household Type)
+```{r}
+# Calculate the average TRANTIME by HHTYPE
+average_trantime_by_hhtype <- cyclists_df %>%
+  group_by(HHTYPE) %>%
+  summarise(avg_trantime = mean(TRANTIME, na.rm = TRUE))
+
+# Convert HHTYPE to a numeric factor for the x-axis
+average_trantime_by_hhtype$HHTYPE_num <- as.numeric(factor(average_trantime_by_hhtype$HHTYPE))
+
+# Line plot of average TRANTIME by HHTYPE
+ggplot(average_trantime_by_hhtype, aes(x = HHTYPE_num, y = avg_trantime, group = 1)) +
+  geom_line(color = "blue", size = 1) +  # Line connecting the averages
+  geom_point(color = "blue", size = 2) +  # Points showing averages
+  labs(title = "Average Bike Commuting Time by Household Type",
+       x = "Household Type", y = "Average Bike Commuting Time") +
+  scale_x_continuous(breaks = average_trantime_by_hhtype$HHTYPE_num,
+                     labels = average_trantime_by_hhtype$HHTYPE) +  # Label x-axis with original HHTYPE labels
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+ 
+### Plotting Average TRANTIME by RENT Group
+```{r}
+# Create bins for RENT
+cyclists_df$Rent_Group <- cut(cyclists_df$RENT, 
+                              breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, Inf), 
+                              labels = c("0-500", "500-1000", "1000-1500", "1500-2000", 
+                                         "2000-2500", "2500-3000", "3000-3500", "3500-4000", "4000+"))
+
+# Calculate the average TRANTIME for each Rent Group, excluding NAs
+avg_trantime_by_rent <- cyclists_df %>%
+  filter(!is.na(Rent_Group)) %>%  # Remove rows where Rent_Group is NA
+  group_by(Rent_Group) %>%
+  summarise(Average_TRANTIME = mean(TRANTIME, na.rm = TRUE))
+
+# Create the line plot of average TRANTIME by Rent Group
+ggplot(avg_trantime_by_rent, aes(x = Rent_Group, y = Average_TRANTIME, group = 1)) +
+  geom_line(color = "green", size = 1) +  # Line for average TRANTIME
+  geom_point(color = "green", size = 3) +  # Points for each rent group
+  labs(title = "Average Bike Commuting Time by Rent Group",
+       x = "Monthly Rent Group", y = "Time (minutes)") +
+  theme_minimal()
+```
